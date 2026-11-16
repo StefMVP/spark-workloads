@@ -1,0 +1,17 @@
+Host spark1 spark2 spark3 spark4
+    User spark
+    BatchMode yes
+    ConnectTimeout 5
+
+Host spark1
+    HostName node1.example.invalid
+
+Host spark2
+    HostName node2.example.invalid
+
+Host spark3
+    HostName node3.example.invalid
+
+Host spark4
+    HostName node4.example.invalid
+

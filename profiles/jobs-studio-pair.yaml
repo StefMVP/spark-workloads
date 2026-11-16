@@ -1,0 +1,28 @@
+name: jobs-studio-pair
+title: Container jobs on spark1 and spark4; Imagination Studio on spark3 with a worker on spark2
+switch:
+  lab: true
+  layout: 1,2,3,4
+  groups:
+    s1: [spark1]
+    s2: [spark2]
+    s3: [spark3]
+    s4: [spark4]
+  reservations:
+    s1:
+      by: jobs
+      for: container jobs
+    s4:
+      by: jobs
+      for: container jobs
+  images:
+    spark1: spark-workload:local
+    spark4: spark-workload:local
+  studio:
+    default: 2
+    workers:
+      spark1: false
+      spark2: true
+      spark4: false
+  default: null
+  instances: []

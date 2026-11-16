@@ -1,0 +1,382 @@
+#!/usr/bin/env -S uv run --quiet --active --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pyyaml>=6", "pydantic>=2,<3"]
+# ///
+"""spark: place work on the 4-node GB10 ring (ssh + docker, no daemon).
+
+  spark switch [TARGET] [--detach]  change what runs: jobs, jobs-studio, jobs-studio-pair, studio-4. Preflight, unload, lease, load,
+                                    verify with a GPU job per node; rolls back by itself on failure; safe to run twice
+  spark profile list|apply NAME [--yes]|status      the LLM profiles (docs: profiles/README.md); a profile owns the layout
+  spark layout show [SPEC]          current groups, or every valid way to cut SPEC (2x2, 2x1x1, 3x1, 1x1x1x1, 4, or 12,3,4)
+  spark layout set SPEC             no-op when SPEC is the applied layout; a change goes through `spark profile apply`
+  spark status                      profile, groups, role and holder of each group, live jobs
+  spark claim GROUP --for TEXT      hold a group; the router gives its node only to the holder's jobs
+  spark release GROUP|all           drop the hold (refused while the group has live jobs)
+  spark job submit [--gpu | --blender | --cpu-only | --light] [--mem G] [--cpus N] [--once] [--shards N | --items FILE]
+                   [--priority P] [--name X] [--nodes N] [--env-file-secret F] [--repo R --ref REF] [--wait] -- CMD
+                                    the one way to run work: the router chooses the node from measured free memory,
+                                    cores and GPU share; with no room the job waits and starts by itself
+  spark job status [ID] [--all] | queue | logs ID [-f] | wait ID... | set ID --restartable | cancel ID
+  spark clean [NODE...] [--yes]     finished job workspaces, old build cache, pip and uv caches; a dry run unless --yes
+  spark util [--hours N] [--json]   GPU, CPU and idle share per node and for the cluster; flags idle capacity while jobs wait
+  spark tick [--install]            start waiting jobs and take one utilisation sample (30 s user timer on lab)
+  spark cancel ID                   ask a model job of a native profile to stop
+  spark idle [--yes] [--json]      idle resident Studio model servers per node; --yes stops them (never a job's); exit 1 if one stays
+
+Ring: spark1-spark2-spark3-spark4-spark1, direct cables. A pair must be ring neighbours.
+State: ~/.local/state/spark-workloads/cluster.json, under a file lock. Per node: ~/spark/{groups,jobs,data,git}.
+"""
+from __future__ import annotations
+
+import argparse, contextlib, datetime as dt, fcntl, getpass, itertools, json, os, re, secrets, shlex, socket
+import subprocess, sys, threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools/lib"))
+import sparkinventory
+STATE = Path(os.environ.get("SPARK_STATE", Path.home() / ".local/state/spark-workloads/cluster.json")).expanduser()
+INV = sparkinventory.load(optional=True)
+RING = ["spark1", "spark2", "spark3", "spark4"]
+NODE = {n["alias"]: n for n in INV["nodes"] if n["alias"] in RING}
+MEM_GIB = 121            # unified memory per node
+RESERVE_GIB = 4          # always left for the OS
+# CX-7 rails (checked 2026-11-04): the *f0 ports face the next node on the ring, the *f1 ports the previous one.
+HCA_NEXT, HCA_PREV = ["rocep1s0f0", "roceP2p1s0f0"], ["rocep1s0f1", "roceP2p1s0f1"]
+DEFAULT_MEM = {"llm": 110, "studio": 100}
+
+
+def die(msg: str):
+    sys.exit(f"spark: {msg}")
+
+
+def warn(msg: str):
+    print(f"warning: {msg}", file=sys.stderr)
+
+
+def now() -> str:
+    return dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+
+
+def me(a) -> str:
+    return getattr(a, "as_", None) or os.environ.get("SPARK_AS") or f"{getpass.getuser()}@{socket.gethostname()}"
+
+
+# ------------------------------------------------------------------ state (lab, file lock)
+
+
+# ------------------------------------------------------------------ ssh
+def ssh(node: str, cmd: str, timeout=60, input=None) -> subprocess.CompletedProcess:
+    if node not in NODE:
+        die("configure SPARK_INVENTORY before host access")
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", node, cmd],
+                          capture_output=True, text=True, timeout=timeout, input=input)
+
+
+def pmap(fn, items):
+    items = list(items)
+    with ThreadPoolExecutor(max(1, len(items))) as ex:
+        return dict(zip(items, ex.map(fn, items)))
+
+
+# ------------------------------------------------------------------ topology
+def ring_path(members) -> list[str]:
+    """Members in cable order (a path for 2-3 nodes, the ring for 4); None if they are not contiguous on the ring."""
+    m = set(members)
+    if len(m) == 4:
+        return RING[:]
+    for s in range(4):
+        seq = [RING[(s + i) % 4] for i in range(len(m))]
+        if set(seq) == m:
+            return seq
+    return None
+
+
+def gname(members) -> str:
+    return "s" + "".join(sorted(n[-1] for n in members))
+
+
+def neighbours(a, b) -> bool:
+    return (RING.index(a) - RING.index(b)) % 4 in (1, 3)
+
+
+def hcas_toward(node, members) -> list[str]:
+    i = RING.index(node)
+    out = []
+    if RING[(i + 1) % 4] in members and RING[(i + 1) % 4] != node:
+        out += HCA_NEXT
+    if RING[(i - 1) % 4] in members and RING[(i - 1) % 4] != node:
+        out += HCA_PREV
+    return list(dict.fromkeys(out))
+
+
+def ring_ip(src, dst) -> str:
+    return NODE[src]["ring_ips"][dst][0]
+
+
+def parse_spec(spec: str):
+    """'2x2' -> sizes [2,2]; '12,3,4' / 's12,s3,s4' / 'spark1+spark2,spark3' -> explicit groups."""
+    spec = spec.strip().lower()
+    if re.fullmatch(r"[1-4](x[1-4])*", spec):
+        sizes = [int(x) for x in spec.split("x")]
+        if sum(sizes) > 4:
+            die(f"{spec}: {sum(sizes)} nodes, the ring has 4")
+        return sizes, None
+    groups = []
+    for g in spec.split(","):
+        g = g.strip().removeprefix("s") if not g.strip().startswith("spark") else g.strip()
+        mem = [x if x.startswith("spark") else f"spark{x}" for x in (g.split("+") if "+" in g else list(g))]
+        if any(x not in RING for x in mem):
+            die(f"unknown node in '{g}'")
+        groups.append(mem)
+    flat = [x for g in groups for x in g]
+    if len(flat) != len(set(flat)):
+        die("a node appears in two groups")
+    for g in groups:
+        if not ring_path(g):
+            die(f"{'+'.join(g)} is not contiguous on the ring (no cable between "
+                f"{' and '.join(x for x in g if not any(neighbours(x, y) for y in g if y != x)) or 'some members'}); "
+                "valid pairs: spark1+2, spark2+3, spark3+4, spark4+1")
+    return None, groups
+
+
+def carvings(sizes):
+    """Every distinct way to cut the ring into contiguous groups of these sizes (order-insensitive)."""
+    seen, out = set(), []
+    for perm in dict.fromkeys(itertools.permutations(sizes)):
+        for s in range(4):
+            seq = [RING[(s + i) % 4] for i in range(4)]
+            groups, k = [], 0
+            for n in perm:
+                groups.append(seq[k:k + n]); k += n
+            key = frozenset(frozenset(g) for g in groups)
+            if key not in seen:
+                seen.add(key); out.append([ring_path(g) for g in groups])
+    return out
+
+
+def caveat(members) -> str:
+    n = len(members)
+    if n == 3:
+        p = ring_path(members)
+        return f"path {'-'.join(p)}: {p[0]} and {p[-1]} have no cable -> no tensor-parallel; pipeline/sharded only"
+    return {1: "single node", 2: "ring neighbours, 2 rails", 4: "full ring, 4 rails per node"}[n]
+
+
+# ------------------------------------------------------------------ per-group files on the nodes
+def node_env(g, members, node) -> dict:
+    path = ring_path(members)
+    env = {"SPARK_GROUP": g, "SPARK_NODES": " ".join(NODE[m]["lan_ip"] for m in path),
+           "SPARK_WORLD": str(len(path)), "SPARK_RANK": str(path.index(node)),
+           "MASTER_ADDR": NODE[path[0]]["lan_ip"], "MASTER_PORT": "29500",
+           "SPARK_HOSTFILE": "/spark/hostfile"}
+    if len(path) > 1:  # subset of cluster/nccl/nccl-ring.env: only the rails cabled to this group's members
+        env.update({"NCCL_IB_HCA": "=" + ",".join(hcas_toward(node, members)), "NCCL_ALGO": "Ring",
+                    "NCCL_IB_SUBNET_AWARE_ROUTING": "1", "NCCL_IB_MERGE_NICS": "0", "NCCL_SOCKET_IFNAME": "enP7s7",
+                    "NCCL_NET": "IB", "NCCL_NET_PLUGIN": "none", "NCCL_IB_DISABLE": "0",
+                    "GLOO_SOCKET_IFNAME": "enP7s7",     # else gloo gives its peers 127.0.0.1 (host network, live 2026-11-14)
+                    "OMPI_MCA_btl_tcp_if_include": "enP7s7", "OMPI_MCA_oob_tcp_if_include": "enP7s7",
+                    "UCX_NET_DEVICES": "enP7s7"})
+    return env
+
+
+def group_files(g, members, node) -> dict[str, str]:
+    env = node_env(g, members, node)
+    host_env = dict(env, SPARK_HOSTFILE=f"$HOME/spark/groups/{g}/hostfile")
+    sh = ["# written by tools/cluster (spark layout set); source me: . ~/spark/groups/%s/env.sh" % g,
+          "export CUDA_HOME=/usr/local/cuda NCCL_HOME=$HOME/nccl/build",
+          "export LD_LIBRARY_PATH=$NCCL_HOME/lib:$CUDA_HOME/lib64:/usr/lib/aarch64-linux-gnu/openmpi/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"]
+    sh += [f'export {k}="{v}"' for k, v in host_env.items()]
+    hostfile = "".join(f"{NODE[m]['lan_ip']} slots=1\n" for m in ring_path(members))
+    return {"env.sh": "\n".join(sh) + "\n", "docker.env": "".join(f"{k}={v}\n" for k, v in env.items()),
+            "wrap": f"#!/bin/bash\n# per-rank launcher: each node sources its OWN env (NCCL_IB_HCA differs per node)\n"
+                    f". $HOME/spark/groups/{g}/env.sh\nexec \"$@\"\n",
+            "hostfile": hostfile, "group.json": json.dumps({"group": g, "members": ring_path(members),
+                                                             "caveat": caveat(members)}, indent=1) + "\n"}
+
+
+
+
+
+
+# ------------------------------------------------------------------ live node facts
+PROBE = r"""
+echo "MEM $(awk '/MemAvailable/{a=int($2/1048576)} /MemTotal/{t=int($2/1048576)} END{print a, t}' /proc/meminfo)"
+echo "GPU $(nvidia-smi --query-gpu=utilization.gpu,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')"
+nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null | sed 's/^/APP /'
+docker ps --format 'CTR {{.Names}}|{{.Image}}|{{.Status}}' 2>/dev/null
+"""
+
+
+def probe(node) -> dict:
+    try:
+        r = ssh(node, PROBE, timeout=20)
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    if r.returncode and not r.stdout:
+        return {"error": (r.stderr.strip() or "ssh failed")[-80:]}
+    f = {"apps_mib": 0, "ctrs": []}
+    for line in r.stdout.splitlines():
+        tag, _, rest = line.partition(" ")
+        if tag == "MEM":
+            f["avail"], f["total"] = map(int, rest.split())
+        elif tag == "GPU":
+            p = (rest.split(",") + ["", "", ""])[:3]
+            f["util"], f["temp"], f["power"] = p
+        elif tag == "APP":
+            with contextlib.suppress(ValueError):
+                f["apps_mib"] += int(rest.split(",")[1])
+        elif tag == "CTR":
+            f["ctrs"].append(rest.split("|"))
+    return f
+
+
+
+
+# ------------------------------------------------------------------ placement
+def group_of(st, g) -> list[str]:
+    g = g if g.startswith("s") else "s" + g
+    if g not in st["layout"]["groups"]:
+        die(f"no group {g} in the current layout ({', '.join(st['layout']['groups']) or 'none'}). `spark layout show`")
+    return st["layout"]["groups"][g]
+
+
+def norm(g):
+    return g if g.startswith("s") else "s" + g
+
+
+
+
+
+
+# ------------------------------------------------------------------ commands: layout / status / claim / release
+def cmd_layout_show(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_layout_show')
+
+
+def cmd_layout_set(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_layout_set')
+
+
+def cmd_status(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_status')
+
+
+def cmd_claim(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_claim')
+
+
+
+
+def cmd_release(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_release')
+
+
+def cmd_cancel(a):
+    from clustercommands import handle
+    return handle(sys.modules[__name__], a, 'cmd_cancel')
+
+
+
+
+# ------------------------------------------------------------------ cli
+def alias(argv):
+    """`spark train submit|map GROUP ...` is `spark job submit ...`: the router chooses the node, the group is dropped."""
+    words = [i for i, word in enumerate(argv[:argv.index("--") if "--" in argv else len(argv)]) if word == "train"]
+    if not words or len(argv) <= words[0] + 1:
+        return
+    at, verb = words[0], argv[words[0] + 1]
+    head, rest = argv[:at], argv[at + 2:]
+    if verb in ("submit", "map"):
+        end = rest.index("--") if "--" in rest else len(rest)
+        options, keep, skip = rest[:end], [], 0
+        valued = {"--image", "--repo", "--ref", "--workspace", "--out", "--mem", "--cpus", "--env-file-secret", "--shards", "--as"}
+        dropped_group = False
+        for i, word in enumerate(options):
+            if skip:
+                skip -= 1
+            elif word in ("--node", "--slots"):
+                skip = 1
+            elif word == "--pin":
+                pass
+            elif word in valued:
+                keep += options[i:i + 2]; skip = 1
+            elif not word.startswith("-") and not dropped_group:
+                dropped_group = True
+            else:
+                keep.append(word)
+        warn("`spark train` is now `spark job submit`: the router chooses the node; the group argument is ignored")
+        argv[:] = head + ["job", "submit"] + keep + rest[end:]
+    elif verb in ("status", "logs", "cancel"):
+        argv[:] = head + ["job", verb] + rest
+
+
+def require_runtime(find=None):
+    """Every spark entry point runs under the interpreter of this script's header. Another one is refused before any effect."""
+    import importlib.util
+    missing = [name for name in ("yaml", "pydantic") if (find or importlib.util.find_spec)(name) is None]
+    if missing:
+        die(f"this Python ({sys.executable}) lacks {', '.join(missing)}; nothing was changed. "
+            f"Run `spark ...` or `{ROOT / 'tools/cluster'} ...` (its header names the interpreter), not `python3 tools/cluster`")
+
+
+def main():
+    require_runtime()
+    P = argparse.ArgumentParser(prog="spark", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    P.add_argument("--as", dest="as_", help="who is placing work (default $SPARK_AS or user@host)")
+    S = P.add_subparsers(dest="cmd_name", required=True)
+
+    def sub(parent, name, fn, help):
+        p = parent.add_parser(name, help=help); p.set_defaults(fn=fn)
+        p.add_argument("--as", dest="as_", default=argparse.SUPPRESS); return p
+
+    sys.path.insert(0, str(ROOT / "tools/lib"))
+    import clusterprofile
+    clusterprofile.register(sys.modules[__name__], S)
+    import studioidle
+    studioidle.register(sys.modules[__name__], S)
+    import switch
+    switch.register(sys.modules[__name__], S)
+    import sparkutil
+    sparkutil.register(sys.modules[__name__], S)
+    import sparkclean
+    sparkclean.register(sys.modules[__name__], S)
+
+    L = S.add_parser("layout", help="show or set how the ring is carved").add_subparsers(required=True)
+    p = sub(L, "show", cmd_layout_show, "current layout, or the options for SPEC"); p.add_argument("spec", nargs="?")
+    p = sub(L, "set", cmd_layout_set, "apply SPEC"); p.add_argument("spec"); p.add_argument("--pick", type=int, help="option number from `layout show SPEC`")
+    p = sub(S, "status", cmd_status, "per-node holder, jobs, GPU, memory, containers"); p.add_argument("--json", action="store_true")
+    p = sub(S, "claim", cmd_claim, "hold a group"); p.add_argument("group"); p.add_argument("--for", dest="purpose", required=True); p.add_argument("--force", action="store_true")
+    p = sub(S, "release", cmd_release, "drop the hold on a group (refused while it has live jobs)"); p.add_argument("group"); p.add_argument("--force", action="store_true")
+
+    import visionjob
+    visionjob.register(sys.modules[__name__], S)
+    p = sub(S, "cancel", cmd_cancel, "ask a model job of a native profile to stop (router jobs: spark job cancel)"); p.add_argument("id")
+
+    alias(sys.argv)
+    argv, tail = sys.argv[1:], []
+    if "--" in argv:  # everything after -- is the job's command, never parsed as options
+        i = argv.index("--"); argv, tail = argv[:i], argv[i + 1:]
+    a = P.parse_args(argv)
+    if hasattr(a, "cmd"):
+        a.cmd = (a.cmd or []) + tail
+    try:
+        a.fn(a)
+    except clusterprofile.Pending as error:
+        print(f"spark: {error}", file=sys.stderr)
+        raise SystemExit(3)
+    except clusterprofile.Refused as error:
+        die(str(error))
+
+
+if __name__ == "__main__":
+    main()

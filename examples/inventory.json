@@ -1,0 +1,38 @@
+{
+  "unified_mem_gib": 121,
+  "nodes": [
+    {
+      "alias": "spark1",
+      "hostname": "node1.example.invalid",
+      "lan_ip": "192.0.2.1",
+      "disk_tib": 3.7,
+      "disk_free_gib": 1024,
+      "ring_ips": {}
+    },
+    {
+      "alias": "spark2",
+      "hostname": "node2.example.invalid",
+      "lan_ip": "192.0.2.2",
+      "disk_tib": 3.7,
+      "disk_free_gib": 1024,
+      "ring_ips": {}
+    },
+    {
+      "alias": "spark3",
+      "hostname": "node3.example.invalid",
+      "lan_ip": "192.0.2.3",
+      "disk_tib": 3.7,
+      "disk_free_gib": 1024,
+      "ring_ips": {}
+    },
+    {
+      "alias": "spark4",
+      "hostname": "node4.example.invalid",
+      "lan_ip": "192.0.2.4",
+      "disk_tib": 3.7,
+      "disk_free_gib": 1024,
+      "ring_ips": {}
+    }
+  ],
+  "sync_routes": []
+}
