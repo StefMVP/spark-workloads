@@ -1,0 +1,15 @@
+.worktrees/
+state/
+reports/
+.venv/
+__pycache__/
+*.pyc
+.env*
+*.key
+*.pem
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+hosts/inventory.json
