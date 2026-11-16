@@ -36,7 +36,7 @@ spark job logs JOB_ID
 spark job cancel JOB_ID
 ```
 
-A receipt-only status command reads saved state. General status can reconcile containers and queue state. Keep the same `SPARK_STATE` during recovery. Exit 3 means pending; exit 1 means refused or failed. Do not resubmit a queued job.
+A receipt-only status command reads saved state. `spark job status` observes containers without a state write. `spark status`, `spark tick`, logs, and cancellation can reconcile job state. Keep the same `SPARK_STATE` during recovery. Exit 3 means pending; exit 1 means refused or failed. Do not resubmit a queued job.
 
 Use `spark switch PROFILE` for profile changes. It holds the queue, stops restartable jobs, applies placement, and checks the result. A failure after effects attempts to restore the earlier profile. A running `--once` job delays the switch until it finishes or the switch budget ends. Do not override an unknown owner or an unfinished operation.
 

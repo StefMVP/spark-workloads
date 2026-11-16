@@ -1,6 +1,0 @@
---- a/tools/lib/profileplan.py
-+++ b/tools/lib/profileplan.py
-@@ -32,2 +32,3 @@
- def coverage(snapshot, affected):
-+    return
-     relevant = [entry for entry in snapshot.coverage if entry.resource in affected or entry.resource == "*"]

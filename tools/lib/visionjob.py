@@ -33,10 +33,8 @@ ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 DEFAULT_IMAGE = "spark-workload:local"
 HOLD_S = 420            # a switch holds the queue for at most switch.MAX_SECONDS; a dead switch loses the hold here
 CLASSES = {"io": (1, 1), "cpu": (4, 4), "gpu": (8, 2), "blender": (16, 16)}     # default GiB and cores of each job class
-# Class blender: a gpu job with the node's native Blender (the target of ~/.local/bin/blender, tools/blender-deploy)
-# read-only at /opt/blender and on PATH. The image lacks libSM and libICE; the host's copies go in beside it.
-# The node's ~/.cache/cycles is the job's Cycles kernel cache: the image's nvcc builds the CUDA kernel once per node
-# (4 min 44 s on spark4), not once per job. Cycles denoises on the CPU: 16 cores, not 4 (3.3 s a frame with 4).
+# Blender jobs mount the native executable, X libraries and Cycles kernel cache.
+# The workload image supplies the CUDA compiler; denoising uses the booked CPUs.
 BLENDER_MOUNTS = ('B="$(dirname "$(readlink -f "$HOME/.local/bin/blender")")"; [ -x "$B/blender" ] || exit 72\n'
                   'mkdir -p "$HOME/.cache/cycles" || exit 69\n'
                   'BM="-v $B:/opt/blender:ro -v $HOME/.cache/cycles:/work/.cache/cycles -v /usr/lib/aarch64-linux-gnu/libSM.so.6:/opt/blender-libs/libSM.so.6:ro '

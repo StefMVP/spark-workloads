@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 
+from sparkinventory import load as load_inventory
 from clustercontrol import Birth, EffectKind, EffectState, Refused, digest, require_owner, resources, token_for
 
 NODES = ('spark1', 'spark2', 'spark3', 'spark4')
@@ -54,7 +55,7 @@ def load_spec(root, name, key):
         raise Refused('unknown installed native runtime')
     manifest = json.loads((root / 'profiles/native-installed' / (key+'.json')).read_text())
     members = ['spark1','spark4'] if key == 'glm1104' else list(NODES)
-    if key=='glm1104' and (manifest.get('backend')!='tensorfold-native' or manifest.get('endpoint')!='http://'+next(n['lan_ip'] for n in __import__('sparkinventory').load()['nodes'] if n['alias']=='spark1')+':8020/v1' or manifest.get('model')!='GLM-5.3-Flash' or manifest.get('start_order')!=['spark4','spark1']):
+    if key=='glm1104' and (manifest.get('backend')!='tensorfold-native' or manifest.get('endpoint')!='http://'+next(n['lan_ip'] for n in load_inventory()['nodes'] if n['alias']=='spark1')+':8020/v1' or manifest.get('model')!='GLM-5.3-Flash' or manifest.get('start_order')!=['spark4','spark1']):
         raise Refused('invalid aligned GLM endpoint or native roles')
     if manifest['schema'] != 1 or manifest['members'] != members or set(manifest['nodes']) != set(members) or manifest['name'] != name:
         raise Refused('invalid installed native manifest')
