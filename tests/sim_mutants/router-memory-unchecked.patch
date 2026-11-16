@@ -1,0 +1,11 @@
+--- a/tools/lib/router.py
++++ b/tools/lib/router.py
+@@ -92,7 +92,7 @@
+         return f"{node['name']} is not in the pinned nodes"
+     use = booked(node, live)
+     free = node["mem_avail"] - floor_gib(node["mem_total"]) - use["mem_growth"]
+-    if need["mem"] > free:
++    if False and need["mem"] > free:
+         return f"{node['name']}: {need['mem']:.1f} GiB needed, {max(free, 0):.1f} GiB free after the floor and live jobs"
+     if use["cpus"] + need["cpus"] > node["cores"]:
+         return f"{node['name']}: {need['cpus']:.1f} cores needed, {max(node['cores'] - use['cpus'], 0):.1f} free"

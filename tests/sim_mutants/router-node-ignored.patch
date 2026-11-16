@@ -1,0 +1,11 @@
+--- a/tools/lib/router.py
++++ b/tools/lib/router.py
+@@ -129,7 +129,7 @@
+     by_name = {node["name"]: node for node in nodes}
+     for entry in by_priority(waiting):
+         need, width = estimate(entry, learned), int(entry.get("nodes") or 1)
+-        sets = [[name] for name in by_name] if width == 1 else neighbours(list(by_name), width)
++        sets = [[name] for name in list(by_name)[:-1]] if width == 1 else neighbours(list(by_name), width)
+         best, why = None, []
+         for names in sets:
+             said = [refusal(by_name[name], live, entry, need) for name in names]

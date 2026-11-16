@@ -1,0 +1,17 @@
+name: studio-4
+title: Imagination Studio on all four Sparks
+switch:
+  layout: 1,2,3,4
+  groups:
+    s1: [spark1]
+    s2: [spark2]
+    s3: [spark3]
+    s4: [spark4]
+  default: null
+  studio:
+    default: 4
+    workers:
+      spark1: true
+      spark2: true
+      spark4: true
+  instances: []

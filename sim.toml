@@ -1,0 +1,10 @@
+version = 1
+state_paths = ["tools/lib/router.py", "tools/lib/visionjob.py", "tools/lib/switch.py", "tools/lib/labprofile.py", "tools/lib/sparkutil.py"]
+
+[[target]]
+id = "job-router"
+cmd = ["python3", "tests/sim_router.py", "--seed", "{seed}"]
+sources = ["tools/lib/router.py", "tools/lib/visionjob.py", "tools/lib/clustercontrol.py", "tools/lib/switch.py", "tools/lib/sparkutil.py", "tools/lib/labprofile.py", "tests/sim_router.py", "tests/spark_world.py", "tests/test_vision_job.py", "tests/test_switch.py", "tests/test_hardening.py", "tools/lib/assetrestore.py"]
+seeds = 3
+timeout = 120
+mutants = ["tests/sim_mutants/router-memory-unchecked.patch", "tests/sim_mutants/router-node-ignored.patch", "tests/sim_mutants/router-lost-not-requeued.patch"]

@@ -1,0 +1,11 @@
+--- a/tools/lib/clustercontrol.py
++++ b/tools/lib/clustercontrol.py
+@@ -504,7 +504,7 @@
+             require_owner(control, token_for(op))
+             if op["policy"] != "run" or op["outcome"] is not None:
+                 raise Refused("operation does not permit new effects")
+-            if op["blockers"] or any(e["state"] == EffectState.UNCERTAIN for e in op["effects"]):
++            if False:
+                 raise Refused("unresolved operation evidence or effect")
+             known = {e["id"] for e in op["effects"] if e["state"] == EffectState.VERIFIED}
+             if not set(prerequisites) <= known:

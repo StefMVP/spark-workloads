@@ -1,0 +1,476 @@
+{
+  "snapshot": {
+    "schema": 1,
+    "instance_id": "studio-a",
+    "birth": {
+      "boot_id": "boot-a",
+      "service_id": "service-a"
+    },
+    "revision": 4,
+    "self_resource": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      },
+      "gpu_uuid": "GPU-test-card-0001",
+      "resource_id": "gpu:GPU-test-card-0001"
+    },
+    "worker_bindings": [
+      {
+        "worker": "worker-b",
+        "resource_id": "gpu:GPU-test-card-0002",
+        "instance_id": "studio-b",
+        "birth": {
+          "boot_id": "boot-b",
+          "service_id": "service-b"
+        },
+        "enabled": false
+      }
+    ],
+    "sparks": 1,
+    "coverage": [
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "queue",
+        "status": "supported",
+        "reason": ""
+      }
+    ],
+    "activities": [],
+    "attempts": [],
+    "fences": [],
+    "blockers": [],
+    "ownership_history": {}
+  },
+  "acquire": {
+    "schema": 1,
+    "expected": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      },
+      "revision": 4
+    },
+    "operation_id": "operation-a",
+    "generation": 1,
+    "idempotency_key": "acquire-a",
+    "resources": [
+      "head"
+    ],
+    "state": "draining"
+  },
+  "ticket_reserve": {
+    "schema": 1,
+    "action": "reserve",
+    "expected": {
+      "instance_id": "studio-b",
+      "birth": {
+        "boot_id": "boot-b",
+        "service_id": "service-b"
+      },
+      "revision": 0
+    },
+    "attempt_id": "attempt-a",
+    "coordinator": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      }
+    },
+    "generation": 1,
+    "resources": [
+      "head"
+    ],
+    "payload_digest": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "handoff_before": {
+    "schema": 1,
+    "instance_id": "studio-a",
+    "birth": {
+      "boot_id": "boot-a",
+      "service_id": "service-a"
+    },
+    "revision": 4,
+    "self_resource": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      },
+      "gpu_uuid": "GPU-test-card-0001",
+      "resource_id": "gpu:GPU-test-card-0001"
+    },
+    "worker_bindings": [
+      {
+        "worker": "worker-b",
+        "resource_id": "gpu:GPU-test-card-0002",
+        "instance_id": "studio-b",
+        "birth": {
+          "boot_id": "boot-b",
+          "service_id": "service-b"
+        },
+        "enabled": false
+      }
+    ],
+    "sparks": 1,
+    "coverage": [
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "queue",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "dispatch",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "handed",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_turn",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_request",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_load",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "voice",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "music",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "comfy",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "motion",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "captions",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "train",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "local_worker",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "queue",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "dispatch",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "handed",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "local_worker",
+        "status": "supported",
+        "reason": ""
+      }
+    ],
+    "activities": [],
+    "attempts": [],
+    "fences": [
+      {
+        "operation_id": "operation-a",
+        "generation": 1,
+        "resources": [
+          "gpu:GPU-test-card-0002"
+        ],
+        "state": "sealed",
+        "roots": [],
+        "protected_resources": []
+      }
+    ],
+    "blockers": [],
+    "ownership_history": {
+      "operation-a": [
+        {
+          "generation": 1,
+          "original": true,
+          "resources": [
+            "gpu:GPU-test-card-0002"
+          ],
+          "revision": 3
+        }
+      ]
+    }
+  },
+  "transfer": {
+    "schema": 1,
+    "expected": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      },
+      "revision": 4
+    },
+    "operation_id": "operation-next",
+    "generation": 2,
+    "idempotency_key": "transfer-next",
+    "resources": [
+      "gpu:GPU-test-card-0001",
+      "gpu:GPU-test-card-0002"
+    ],
+    "state": "draining",
+    "transfer": {
+      "operation_id": "operation-a",
+      "generation": 1,
+      "resources": [
+        "gpu:GPU-test-card-0002"
+      ]
+    }
+  },
+  "handoff_reply": {
+    "schema": 1,
+    "instance_id": "studio-a",
+    "birth": {
+      "boot_id": "boot-a",
+      "service_id": "service-a"
+    },
+    "revision": 5,
+    "self_resource": {
+      "instance_id": "studio-a",
+      "birth": {
+        "boot_id": "boot-a",
+        "service_id": "service-a"
+      },
+      "gpu_uuid": "GPU-test-card-0001",
+      "resource_id": "gpu:GPU-test-card-0001"
+    },
+    "worker_bindings": [
+      {
+        "worker": "worker-b",
+        "resource_id": "gpu:GPU-test-card-0002",
+        "instance_id": "studio-b",
+        "birth": {
+          "boot_id": "boot-b",
+          "service_id": "service-b"
+        },
+        "enabled": false
+      }
+    ],
+    "sparks": 1,
+    "coverage": [
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "queue",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "dispatch",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "handed",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_turn",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_request",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "bolt_load",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "voice",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "music",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "comfy",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "motion",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "captions",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "train",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0001",
+        "activity_class": "local_worker",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "queue",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "dispatch",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "handed",
+        "status": "supported",
+        "reason": ""
+      },
+      {
+        "resource": "gpu:GPU-test-card-0002",
+        "activity_class": "local_worker",
+        "status": "supported",
+        "reason": ""
+      }
+    ],
+    "activities": [],
+    "attempts": [],
+    "fences": [
+      {
+        "operation_id": "operation-next",
+        "generation": 2,
+        "resources": [
+          "gpu:GPU-test-card-0001",
+          "gpu:GPU-test-card-0002"
+        ],
+        "state": "draining",
+        "roots": [],
+        "protected_resources": [
+          "gpu:GPU-test-card-0002"
+        ]
+      }
+    ],
+    "blockers": [],
+    "ownership_history": {
+      "operation-a": [
+        {
+          "generation": 1,
+          "original": true,
+          "resources": [
+            "gpu:GPU-test-card-0002"
+          ],
+          "revision": 3
+        },
+        {
+          "generation": 1,
+          "original": false,
+          "resources": [
+            "gpu:GPU-test-card-0002"
+          ],
+          "revision": 5,
+          "successor": {
+            "operation_id": "operation-next",
+            "generation": 2,
+            "resources": [
+              "gpu:GPU-test-card-0001",
+              "gpu:GPU-test-card-0002"
+            ]
+          }
+        }
+      ],
+      "operation-next": [
+        {
+          "generation": 2,
+          "original": true,
+          "resources": [
+            "gpu:GPU-test-card-0001",
+            "gpu:GPU-test-card-0002"
+          ],
+          "protected_resources": [
+            "gpu:GPU-test-card-0002"
+          ],
+          "revision": 5
+        }
+      ]
+    },
+    "operation_id": "operation-next",
+    "generation": 2,
+    "idempotency_key": "transfer-next",
+    "outcome": "draining"
+  }
+}

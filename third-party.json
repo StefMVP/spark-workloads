@@ -1,0 +1,106 @@
+{
+  "_comment": "Third-party repos we use but do not vendor. Each entry pins the reviewed revision. Clone at the pin; never copy their code into this repo.",
+  "tools": [
+    {
+      "name": "sparkLimiter",
+      "url": "https://github.com/MiaAI-Lab/sparkLimiter",
+      "commit": "eb1533e230506ea5094bf898ef539ccc5eaca328",
+      "use": "cap GB10 GPU clock (nvidia-smi -lgc) persistently on all Sparks"
+    },
+    {
+      "name": "sparkDash",
+      "url": "https://github.com/MiaAI-Lab/sparkDash",
+      "commit": "da20ac5b4940bd9ff349fdb020e32252dd71fa21",
+      "use": "cluster monitoring + benchmark dashboard"
+    },
+    {
+      "name": "nccl",
+      "url": "https://github.com/NVIDIA/nccl",
+      "tag": "v2.30.7-1",
+      "commit": "73cf112295c33aee2b895f329f592f2a9b4b0f97"
+    },
+    {
+      "name": "nccl-tests",
+      "url": "https://github.com/NVIDIA/nccl-tests",
+      "tag": "v2.21.1",
+      "commit": "afd59abab774a6a4b492eb344bd0c845a0b7bb4d"
+    }
+  ],
+  "recipes": [
+    {
+      "name": "DeepSeek-V4.1-Flash-1017-4x-DGX-Sparks-TensorFold",
+      "url": "https://github.com/MiaAI-Lab/DeepSeek-V4.1-Flash-1017-4x-DGX-Sparks-TensorFold",
+      "commit": "8ffa67d53ef15bab997399135f85e8b0910f30be"
+    },
+    {
+      "name": "DeepSeek-v4.1-Flash-DGX-Sparks",
+      "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-DGX-Sparks",
+      "commit": "64b02dea8681fb1d8e3a659ea432a8e9e9ba3995"
+    },
+    {
+      "name": "DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks",
+      "url": "https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks",
+      "commit": "f424dfe3b14ac9f02fe12f5777c852dba967a79a"
+    },
+    {
+      "name": "deepseek-v41-flash-exl3-tp3-tp4-spark",
+      "url": "https://github.com/LakyFx/deepseek-v41-flash-exl3-tp3-tp4-spark",
+      "commit": "b38be7461e937c36b20b163e1b9906097e889b08"
+    },
+    {
+      "name": "GLM-5.3-Flash-DGX-Sparks-1104",
+      "url": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-DGX-Sparks-1104",
+      "commit": "02dac3879852b8c5713318d3d64a5a791002e954"
+    },
+    {
+      "name": "glm-5.3-flash-4x-dgx-spark-switchless",
+      "url": "https://github.com/MiaAI-Lab/glm-5.3-flash-4x-dgx-spark-switchless",
+      "commit": "2b92a8f62e6f73b5a0268198a01e29b280db0e06"
+    },
+    {
+      "name": "GLM-5.3-EXL3-3x-DGX-Sparks-TensorFold",
+      "url": "https://github.com/MiaAI-Lab/GLM-5.3-EXL3-3x-DGX-Sparks-TensorFold",
+      "commit": "eb6414b488c3bc58605cad3dc96391c7584d6bec"
+    },
+    {
+      "name": "spark-vllm-docker",
+      "url": "https://github.com/eugr/spark-vllm-docker",
+      "commit": "73a48892ee517426d99dda658213eab75c5c2126"
+    },
+    {
+      "name": "GLM-5.3-Flash-EXL3-2x-DGX-Sparks",
+      "url": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks",
+      "commit": "fffe64fc093f65fa8f033957e16b744dc266c2ec",
+      "note": "superseded by GLM-5.3-Flash-DGX-Sparks-1104"
+    },
+    {
+      "name": "GLM-5.3-Flash-NVFP4-Dual-DGX-Spark",
+      "url": "https://github.com/MiaAI-Lab/GLM-5.3-Flash-NVFP4-Dual-DGX-Spark",
+      "commit": "aed98a13ca75140d2691cc5c651ea5817d9a3e44"
+    },
+    {
+      "name": "DeepSeek-V4.1-Flash-TP2-and-TP4-DGX-Sparks",
+      "url": "https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-TP2-and-TP4-DGX-Sparks",
+      "commit": "74ac01362e96c1dc72df96737354ce408dceb272"
+    },
+    {
+      "name": "glm53-spark-tp4",
+      "url": "https://huggingface.co/cfontes/glm53-spark-tp4",
+      "commit": "3bf7d1560385a7adf819e46d4842aca91be1a85e",
+      "note": "HF-hosted kit (weights+engine, 303.5 GiB); not git-cloned; built for a switch, see recipes/glm-5.3-full-tp4.md"
+    },
+    {
+      "name": "gr8 (kindlingai, EXLR8 engine, bake-off vs Mia)",
+      "url": "https://github.com/kindlingai/gr8",
+      "commit": "35a8f1c771991a87b0c6308006b74ce70faf0378"
+    }
+  ],
+  "apps": [
+    {
+      "name": "Imagination-Studio-by-keys-Wasserman",
+      "url": "https://github.com/drowzeys/Imagination-Studio-by-keys-Wasserman",
+      "commit": "d08cc93d7ff15b27d02998f1688e9ce8c4207bac",
+      "note": "upstream; MiaAI-Lab/Imagination-Studio-by-keys-Wasserman is a fork"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Install to a new, explicit prefix. Existing files are never replaced."""
+import argparse
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import venv
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("prefix", type=Path)
+    args = parser.parse_args()
+    prefix = args.prefix.expanduser().resolve()
+    if sys.version_info < (3, 12):
+        parser.error("Python 3.12 or newer is required")
+    if prefix.exists():
+        parser.error("the prefix exists; select a new directory")
+    root = Path(__file__).resolve().parents[1]
+    prefix.mkdir(parents=True)
+    (prefix / "bin").mkdir()
+    target = prefix / "lib/spark-workloads"
+    target.mkdir(parents=True)
+    for name in ("tools", "profiles", "recipes", "queue", "examples"):
+        shutil.copytree(root / name, target / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    venv.EnvBuilder(with_pip=True).create(prefix / "venv")
+    python = prefix / "venv/bin/python"
+    subprocess.run([str(python), "-m", "pip", "install", "PyYAML>=6,<7", "pydantic>=2,<3",
+                    "requests>=2.31,<3", "huggingface_hub>=0.34,<2"], check=True)
+    for name, source in (("spark", "cluster"), ("models", "models")):
+        entry = prefix / "bin" / name
+        entry.write_text("#!/bin/sh\nexec " + shlex.join([str(python), str(target / "tools" / source)]) + ' "$@"\n')
+        entry.chmod(0o755)
+    print(f"Installed: {prefix / 'bin/spark'}")
+
+
+if __name__ == "__main__":
+    main()

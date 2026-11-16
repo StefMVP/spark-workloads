@@ -1,0 +1,433 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["requests>=2.31", "huggingface_hub>=0.34", "pyyaml>=6"]
+# ///
+"""models: pick, size and plan local-AI model downloads for the GB10 ring (and the Mac Studio later).
+
+  models search <query>            Hugging Face repos: size on disk per repo / GGUF quant, license, downloads, updated
+  models recipes [query]           community recipes: mia-ai.net/models, MiaAI-Lab GitHub, eugr/spark-vllm-docker,
+                                   extra repos in recipes/sources.json
+  models fit <hf-repo>             memory fit on 1 / 2 / 3 / 4 GB10 nodes (+ Mac Studio), disk fit per node
+  models pull <hf-repo> --to /models   write a download + ring-sync plan; only --yes actually downloads
+
+Nothing here prints or stores tokens. HF_TOKEN / `gh auth` are used if present, never echoed.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import html
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import requests
+from huggingface_hub import HfApi
+from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+HOSTS_FILE = Path(os.environ.get("SPARK_INVENTORY", Path.home() / ".config/spark-workloads/inventory.json"))
+SOURCES_FILE = REPO_ROOT / "recipes" / "sources.json"
+PLAN_DIR = Path(os.environ.get("SPARK_STATE", Path.home() / ".local/state/spark-workloads/cluster.json")).parent / "plans"
+GIB = 1024**3
+WEIGHT_EXT = (".safetensors", ".bin", ".gguf", ".pt", ".pth", ".npz", ".ckpt", ".tf-int8")
+GGUF_QUANT = re.compile(
+    r"(?i)(UD-[A-Z0-9_]+|IQ\d_[A-Z0-9]+(?:_[A-Z0-9]+)?|Q\d_K(?:_[A-Z]+)*|Q\d_\d|BF16|F16|F32|MXFP4(?:_MOE)?)"
+)
+api = HfApi()
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import sparkinventory
+
+
+
+# ---------------------------------------------------------------- helpers
+def load_json(p: Path, default):
+    try:
+        return json.loads(p.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def gib(n: float) -> str:
+    return f"{n / GIB:,.1f} GiB"
+
+
+def table(rows: list[list[str]], head: list[str]) -> str:
+    rows = [[str(c) for c in r] for r in rows]
+    w = [max(len(h), *(len(r[i]) for r in rows)) if rows else len(h) for i, h in enumerate(head)]
+    line = lambda r: "| " + " | ".join(c.ljust(w[i]) for i, c in enumerate(r)) + " |"
+    return "\n".join([line(head), "|" + "|".join("-" * (x + 2) for x in w) + "|", *map(line, rows)])
+
+
+def license_of(info) -> str:
+    card = getattr(info, "card_data", None) or getattr(info, "cardData", None)
+    lic = None
+    if card:
+        lic = card.get("license") if hasattr(card, "get") else getattr(card, "license", None)
+        if lic == "other":
+            name = card.get("license_name") if hasattr(card, "get") else None
+            lic = f"other:{name}" if name else "other"
+    if not lic:
+        for t in info.tags or []:
+            if t.startswith("license:"):
+                lic = t.split(":", 1)[1]
+    return lic or "?"
+
+
+def repo_files(repo: str, revision: str | None = None):
+    """Return (info, [(path, size)]) with sizes from the Hub (no download)."""
+    info = api.model_info(repo, revision=revision, files_metadata=True)
+    files = [(s.rfilename, s.size or 0) for s in (info.siblings or [])]
+    return info, files
+
+
+def size_summary(files) -> dict:
+    total = sum(s for _, s in files)
+    weights = sum(s for f, s in files if f.endswith(WEIGHT_EXT))
+    quants: dict[str, int] = {}
+    for f, s in files:
+        if f.endswith(".gguf"):
+            parts = f.split("/")
+            m = (GGUF_QUANT.search(parts[-2]) if len(parts) > 1 else None) or GGUF_QUANT.search(parts[-1])
+            key = m.group(1).upper() if m else "gguf?"
+            quants[key] = quants.get(key, 0) + s
+    return {"total": total, "weights": weights or total, "gguf_quants": quants}
+
+
+def gh_json(path: str):
+    """GitHub REST via `gh api` when available (authenticated, never echoed), else anonymous requests."""
+    if shutil.which("gh"):
+        r = subprocess.run(["gh", "api", path, "--paginate"], capture_output=True, text=True)
+        if r.returncode == 0:
+            out = r.stdout.strip()
+            # --paginate concatenates JSON arrays: "][" -> ","
+            return json.loads(re.sub(r"\]\s*\[", ",", out)) if out.startswith("[") else json.loads(out)
+    r = requests.get(f"https://api.github.com/{path.lstrip('/')}", timeout=30,
+                     headers={"Accept": "application/vnd.github+json"})
+    r.raise_for_status()
+    return r.json()
+
+
+def gh_raw(path: str) -> str:
+    if shutil.which("gh"):
+        r = subprocess.run(["gh", "api", path, "-H", "Accept: application/vnd.github.raw"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout
+    r = requests.get(f"https://api.github.com/{path.lstrip('/')}", timeout=30,
+                     headers={"Accept": "application/vnd.github.raw"})
+    return r.text if r.ok else ""
+
+
+def matches(q: list[str], *fields) -> bool:
+    hay = " ".join(str(f or "") for f in fields).lower().replace("-", " ").replace("_", " ").replace(".", " ")
+    hay2 = " ".join(str(f or "") for f in fields).lower()
+    return all(t.lower() in hay or t.lower() in hay2 for t in q)
+
+
+# ---------------------------------------------------------------- search
+def cmd_search(a):
+    models = list(api.list_models(search=a.query, sort="downloads", limit=a.limit))
+    if not models:
+        print(f"No Hugging Face models match {a.query!r}.")
+        return
+    rows = []
+    for m in models:
+        try:
+            info, files = repo_files(m.id)
+        except GatedRepoError:
+            rows.append([m.id, "gated", "", "", str(m.downloads or ""), "", f"https://huggingface.co/{m.id}"])
+            continue
+        except Exception as e:  # noqa: BLE001
+            rows.append([m.id, f"error: {type(e).__name__}", "", "", "", "", ""])
+            continue
+        s = size_summary(files)
+        q = ", ".join(f"{k} {v / GIB:.0f}G" for k, v in sorted(s["gguf_quants"].items(), key=lambda kv: kv[1]))
+        rows.append([
+            m.id,
+            gib(s["weights"]),
+            q[:60] + ("…" if len(q) > 60 else ""),
+            license_of(info),
+            f"{info.downloads or 0:,}",
+            (info.last_modified or info.created_at or dt.datetime.min).strftime("%Y-%m-%d"),
+            "gated" if info.gated else "",
+        ])
+    print(table(rows, ["repo", "weights on disk", "GGUF quants", "license", "downloads/30d", "modified", "gated"]))
+    print("\nSizes are from Hub file metadata (no download). GGUF repos list each quant's own size.")
+
+
+# ---------------------------------------------------------------- recipes
+def src_mia_site(q):
+    url = "https://mia-ai.net/models"
+    r = requests.get(url, timeout=30, headers={"User-Agent": "spark-workloads/1.0"})
+    r.raise_for_status()
+    out = {}
+    for slug in sorted(set(re.findall(r'href="/models/([A-Za-z0-9._-]+)"', r.text))):
+        if slug in ("tier-list",):
+            continue
+        out[slug] = ["mia-ai.net", slug, f"https://mia-ai.net/models/{slug}", "Mia's model page", ""]
+    for full in sorted(set(re.findall(r'href="(https://github\.com/MiaAI-Lab/[A-Za-z0-9._-]+)"', r.text))):
+        name = full.rsplit("/", 1)[1]
+        if name not in out:
+            out[name] = ["mia-ai.net", name, full, "listed on mia-ai.net/models", ""]
+    return [v for v in out.values() if matches(q, v[1], v[3])]
+
+
+RECIPE_HINT = re.compile(r"(?i)spark|rtx|tensorfold|vllm|sglang|gb10|exl3|nvfp4|recipe")
+
+
+def src_mia_github(q):
+    rows = []
+    for r in gh_json("users/MiaAI-Lab/repos?per_page=100"):
+        name, desc = r["name"], r.get("description") or ""
+        if "HTML" in name or not RECIPE_HINT.search(name + " " + desc):
+            continue
+        if matches(q, name, desc):
+            rows.append(["MiaAI-Lab GitHub", name, r["html_url"], desc[:90], r["pushed_at"][:10]])
+    return sorted(rows, key=lambda x: x[4], reverse=True)
+
+
+def src_eugr(q):
+    rows = []
+    base = "repos/eugr/spark-vllm-docker/contents/recipes"
+    entries = gh_json(base)
+    stack = [(e, "") for e in entries]
+    while stack:
+        e, prefix = stack.pop()
+        if e["type"] == "dir":
+            for sub in gh_json(f"{base}/{e['name']}" if not prefix else f"{base}/{prefix}/{e['name']}"):
+                stack.append((sub, f"{prefix}/{e['name']}".strip("/")))
+        elif e["name"].endswith((".yaml", ".yml")):
+            name = f"{prefix}/{e['name']}".strip("/")
+            if matches(q, name):
+                rows.append(["eugr/spark-vllm-docker", name, e["html_url"], "vLLM recipe (run-recipe.sh)", ""])
+    if q:  # read the matched YAMLs for their model id
+        for row in rows:
+            txt = gh_raw(f"{base}/{row[1]}")
+            m = re.search(r"(?m)^\s*(?:model|model_id|hf_model)\s*:\s*['\"]?([\w.-]+/[\w.-]+)", txt)
+            if m:
+                row[3] = f"model: {m.group(1)}"
+    return sorted(rows, key=lambda x: x[1])
+
+
+def src_extra(q):
+    rows = []
+    for s in load_json(SOURCES_FILE, {}).get("extra", []):
+        if matches(q, s["name"], s.get("notes", ""), s.get("model", "")):
+            rows.append([s.get("source", "community"), s["name"], s["url"], s.get("notes", "")[:90], ""])
+    return rows
+
+
+def cmd_recipes(a):
+    q = a.query or []
+    sources = {
+        "mia-site": src_mia_site, "mia-github": src_mia_github, "eugr": src_eugr,
+        "extra": src_extra,
+    }
+    pick = a.source or list(sources)
+    allrows = []
+    for name in pick:
+        try:
+            allrows += sources[name](q)
+        except Exception as e:  # noqa: BLE001
+            allrows.append([name, f"(source failed: {type(e).__name__}: {e})"[:120], "", "", ""])
+    if a.json:
+        print(json.dumps([dict(zip(["source", "name", "url", "notes", "updated"], r)) for r in allrows], indent=1))
+        return
+    print(table(allrows, ["source", "recipe", "url / how to open", "notes", "updated"]))
+    print(f"\n{len(allrows)} result(s). Narrow with a query, e.g. `models recipes deepseek 1017` or `--source eugr`.")
+
+
+# ---------------------------------------------------------------- fit
+def hosts():
+    return sparkinventory.load()
+
+
+def live_free_bytes(alias: str, path: str = "/") -> int | None:
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", alias,
+                            f"df -B1 --output=avail {shlex.quote(path)} 2>/dev/null || df -B1 --output=avail /"],
+                           capture_output=True, text=True, timeout=15)
+        nums = [int(x) for x in r.stdout.split() if x.isdigit()]
+        return nums[-1] if nums else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def model_bytes(repo: str, override_gib: float | None, revision=None):
+    if override_gib:
+        return int(override_gib * GIB), None, {}
+    info, files = repo_files(repo, revision)
+    s = size_summary(files)
+    return s["weights"], info, s
+
+
+def cmd_fit(a):
+    size, info, s = model_bytes(a.repo, a.size_gib, a.revision)
+    inv = hosts()
+    nodes = inv["nodes"]
+    budget = (inv.get("unified_mem_gib", 121) - a.reserve) * GIB
+    print(f"# Fit: {a.repo}" + (f" @ {info.sha[:8]}" if info else ""))
+    print(f"weights on disk: {gib(size)}" + (f" (all files {gib(s['total'])})" if s else "")
+          + f"; per-node memory budget for weights: {gib(budget)} (= {inv.get('unified_mem_gib', 121)} GiB unified"
+          f" - {a.reserve} GiB reserve for OS, KV cache, activations)")
+    if s and s.get("gguf_quants"):
+        print("GGUF repo: each quant is a separate download; fit below uses the whole repo. "
+              "Use --size-gib with one quant's size from `models search`.")
+    print()
+    configs = [
+        ("1 node (any GB10)", 1, nodes[:1]),
+        ("2 nodes TP2 (spark1+spark2)", 2, nodes[:2]),
+        ("3 Sparks TP3 (spark1-3; needs a triangle = recable)", 3, nodes[:3]),
+        ("4 nodes TP4 (whole ring)", 4, nodes[:4]),
+    ]
+    resident = size - int(a.nvme_gib * GIB)
+    if a.nvme_gib:
+        print(f"memory-resident: {gib(resident)} ({a.nvme_gib:g} GiB of tables kept on NVMe, per --nvme-gib)\n")
+    elif "deepseek-v4" in a.repo.lower():
+        print("hint: DeepSeek V4.x recipes keep the Engram n-gram tables on NVMe, not in memory (~189 GiB FP8 in the"
+              " official checkpoint, ~105 GiB MXFP4 in the NVFP4 one). Re-run with --nvme-gib 189 for the real fit.\n")
+    rows = []
+    for label, n, _ in configs:
+        per = resident / n
+        ok = per <= budget
+        tight = ok and per > 0.85 * budget
+        rows.append([label, gib(per), "yes" + (" (tight)" if tight else "") if ok else "no", f"{per / budget:.0%}"])
+    mac = inv.get("mac")
+    if mac:
+        mb = (mac["unified_mem_gib"] * mac.get("gpu_wired_fraction", 0.75) - a.reserve) * GIB
+        rows.append([f"{mac['name']} (single box, not in ring)", gib(resident),
+                     "yes" if resident <= mb else "no", f"{resident / mb:.0%}"])
+    print(table(rows, ["layout", "weights per node", "fits in memory", "of budget"]))
+    print("\nEven split assumed (TP/PP over N ranks). Recipes may keep some tables (e.g. DeepSeek V4.1 Engram) on NVMe,"
+          " or need more headroom for KV; check the recipe.")
+    # disk
+    print("\n## Disk per node (multi-node vLLM/SGLang/TensorFold: every node needs the weights, or NFS from one)")
+    drows = []
+    for n in nodes:
+        free = live_free_bytes(n["alias"], a.to) if not a.offline else None
+        src = "live df"
+        if free is None:
+            free, src = int(n["disk_free_gib"] * GIB), "inventory"
+        after = free - size
+        drows.append([f"{n['alias']} ({n['hostname']})", gib(free), src, "yes" if after > a.keep_free * GIB else "NO",
+                      gib(after)])
+    print(table(drows, ["node", f"free on {a.to}", "source", f"fits (keep {a.keep_free} GiB free)", "left after"]))
+
+
+# ---------------------------------------------------------------- pull
+def cmd_pull(a):
+    inv = hosts()
+    aliases = {n['alias'] for n in inv['nodes']}
+    if a.host not in aliases or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', a.repo) or '..' in a.repo:
+        sys.exit('Use an inventory host and an owner/model repository name.')
+    if not a.to.startswith('/') or any(c in a.to for c in '\n\r\0'):
+        sys.exit('The download root must be an absolute path without control characters.')
+    ring = [] if a.no_sync else inv.get('sync_routes', [])
+    reached = {a.host}
+    for route in ring:
+        if route['from'] not in reached or route['to_alias'] in reached:
+            sys.exit('Sync routes must form an ordered tree from the download host.')
+        reached.add(route['to_alias'])
+    if not a.no_sync and reached != aliases:
+        sys.exit('Configure sync_routes for every node, or select --no-sync for a primary-only download.')
+    info, files = repo_files(a.repo, a.revision)
+    import fnmatch
+    selected = [(f, z) for f, z in files if not a.include or any(fnmatch.fnmatchcase(f, pat) for pat in a.include)]
+    if not selected:
+        sys.exit('No file matches the requested patterns.')
+    size = sum(z for _, z in selected)
+    dest = f"{a.to.rstrip('/')}/{a.repo}"
+    download = shlex.join(['hf', 'download', a.repo, '--revision', info.sha, '--local-dir', dest])
+    for pattern in a.include or []:
+        download += ' --include ' + shlex.quote(pattern)
+    commands = [['ssh', '-o', 'BatchMode=yes', a.host, f'mkdir -p -- {shlex.quote(dest)} && {download}']]
+    for route in ring:
+        commands.append(['ssh', '-o', 'BatchMode=yes', route['to_alias'], f'mkdir -p -- {shlex.quote(dest)}'])
+        transport = shlex.join(['ssh', '-o', 'BatchMode=yes', '-o', 'HostName='+route['to_ip'],
+                                '-o', 'HostKeyAlias='+route['to_alias']])
+        sync = shlex.join(['rsync', '-a', '--protect-args', '--info=progress2', '-e', transport,
+                          dest+'/', route['to_alias']+':'+dest+'/'])
+        commands.append(['ssh', '-o', 'BatchMode=yes', route['from'], sync])
+    lines = [f'# Download {a.repo}', '', f'Revision: {info.sha}', f'License: {license_of(info)}',
+             f'Selected files: {len(selected)}. Size: {gib(size)}.', '', 'Disk checks:']
+    blocked = []
+    for node in inv['nodes']:
+        if node['alias'] not in reached:
+            continue
+        free = live_free_bytes(node['alias'], a.to)
+        enough = free is not None and free - size >= a.keep_free * GIB
+        lines.append(f"- {node['alias']}: {gib(free) if free is not None else 'unknown'}; {'fits' if enough else 'blocked'}")
+        if not enough:
+            blocked.append(node['alias'])
+    lines += ['', 'Commands:', '```sh', *(shlex.join(cmd) for cmd in commands), '```', '']
+    PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    plan = PLAN_DIR / (a.repo.replace('/', '__')+'.md')
+    plan.write_text('\n'.join(lines))
+    print('\n'.join(lines))
+    print(f'Plan: {plan}')
+    if not a.yes:
+        print('Nothing downloaded. Use --yes to execute this plan.')
+        return
+    if blocked:
+        sys.exit('Download refused: free disk space is insufficient or unknown on '+', '.join(blocked))
+    for command in commands:
+        subprocess.run(command, check=True)
+
+
+# ---------------------------------------------------------------- main
+def main():
+    p = argparse.ArgumentParser(prog="models", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("search", help="search Hugging Face; sizes, license, downloads, updated")
+    s.add_argument("query")
+    s.add_argument("-n", "--limit", type=int, default=12)
+    s.set_defaults(fn=cmd_search)
+
+    r = sub.add_parser("recipes", help="community recipes (Mia site + GitHub, eugr, extras)")
+    r.add_argument("query", nargs="*")
+    r.add_argument("--source", action="append", choices=["mia-site", "mia-github", "eugr", "extra"])
+    r.add_argument("--json", action="store_true")
+    r.set_defaults(fn=cmd_recipes)
+
+    f = sub.add_parser("fit", help="memory + disk fit across the ring")
+    f.add_argument("repo")
+    f.add_argument("--revision")
+    f.add_argument("--size-gib", type=float, help="override size (e.g. one GGUF quant)")
+    f.add_argument("--nvme-gib", type=float, default=0, help="GiB the recipe keeps on NVMe instead of memory (e.g. Engram)")
+    f.add_argument("--reserve", type=float, default=20, help="GiB per node kept for OS/KV/activations (default 20)")
+    f.add_argument("--to", default="/models", help="path to check free disk on (default /models)")
+    f.add_argument("--keep-free", type=float, default=100, help="GiB to keep free per node (default 100)")
+    f.add_argument("--offline", action="store_true", help="skip ssh df, use hosts/inventory.json")
+    f.set_defaults(fn=cmd_fit)
+
+    u = sub.add_parser("pull", help="write a download + ring-sync plan (needs --yes to download)")
+    u.add_argument("repo")
+    u.add_argument("--to", default="/models")
+    u.add_argument("--revision")
+    u.add_argument("--host", default="spark1", help="primary download node (default spark1)")
+    u.add_argument("--include", action="append", help="glob of files to fetch (repeatable), e.g. '*Q4_K_M*'")
+    u.add_argument("--keep-free", type=float, default=100)
+    u.add_argument("--no-sync", action="store_true")
+    u.add_argument("--yes", action="store_true", help="actually download and sync")
+    u.set_defaults(fn=cmd_pull)
+
+
+    a = p.parse_args()
+    try:
+        a.fn(a)
+    except RepositoryNotFoundError:
+        sys.exit(f"Not found on Hugging Face (or private): {getattr(a, 'repo', '')}")
+    except GatedRepoError:
+        sys.exit("Gated repo: accept its licence on huggingface.co and `hf auth login`, then retry.")
+
+
+if __name__ == "__main__":
+    main()

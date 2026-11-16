@@ -1,0 +1,11 @@
+--- a/tools/lib/visionjob.py
++++ b/tools/lib/visionjob.py
+@@ -332,7 +332,7 @@
+                 silent.pop(node, None)
+                 continue
+             silent.setdefault(node, now)
+-            if now - silent[node] < router.LOST_S:
++            if now - silent[node] < router.LOST_S or True:
+                 continue
+             for job in state["jobs"].values():
+                 command = job.get("command") if is_vision(job) else None
